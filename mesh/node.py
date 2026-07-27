@@ -388,3 +388,90 @@ class MeshNode:
                 'mem_size':self.memory.size(),
                 'failed':list(self.fault_mgr.failed),
                 'tasks_done':self.scheduler._done}
+
+if __name__ == "__main__":
+    import argparse
+    
+    p = argparse.ArgumentParser(description="Mesh OS · Nodo B.A.T.M.A.N.")
+    p.add_argument('--id',        type=int, required=True,
+                   help="ID único del nodo (entero positivo)")
+    p.add_argument('--interface', default='wlan0',
+                   help="Interfaz de red (wlan0, etc.)")
+    p.add_argument('--bind',      default='0.0.0.0',
+                   help="IP de bind para puertos TCP")
+    p.add_argument('--data-dir',  default='./mesh_data',
+                   help="Directorio de persistencia")
+    p.add_argument('--demo',      action='store_true',
+                   help="Inyectar tareas ML automáticamente cada 20s")
+    p.add_argument('--log-level', default='INFO',
+                   choices=['DEBUG','INFO','WARNING','ERROR'])
+    args = p.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+    )
+
+    # Puertos por defecto
+    BCAST_PORT = 5555
+    UNICAST_PORT = 5556
+    MEM_PORT = 5557
+    CTRL_PORT = 5559
+
+    node = MeshNode(
+        node_id=args.id,
+        interface=args.interface,
+        bind_ip=args.bind,
+        data_dir=args.data_dir.replace('-', '_'),
+        BCAST_PORT=BCAST_PORT,
+        UNICAST_PORT=UNICAST_PORT,
+        MEM_PORT=MEM_PORT,
+        CTRL_PORT=CTRL_PORT
+    )
+
+    if args.demo:
+        DEMO_TASKS = [
+            ('linreg',   {'X':[[1],[2],[3],[4],[5]],'y':[2,4,5,4,5],
+                          'lr':0.01,'epochs':500}),
+            ('mlp',      {'X':[[0,0],[0,1],[1,0],[1,1]],'y':[0,1,1,0],
+                          'lr':0.1,'epochs':1000,'hidden':4}),
+            ('svm',      {'X':[[1,2],[2,3],[5,5],[6,5]],'y':[-1,-1,1,1],
+                          'lr':0.001,'C':1.0,'epochs':200}),
+            ('sfusion', {'readings':{
+                'temp':[22.1,22.3,22.0,21.8],
+                'co2':[410,412,409,411],
+                'pressure':[1013.0,1012.5,1013.2]}}),
+            ('astar', {'grid':[[0,0,0,0,0],[0,1,1,0,0],[0,0,0,1,0],
+                                  [0,1,0,0,0],[0,0,0,0,0]],
+                          'start':[0,0],'goal':[4,4]}),
+        ]
+        def demo_loop():
+            time.sleep(10)
+            i = 0
+            while node._running:
+                tt, pl = DEMO_TASKS[i % len(DEMO_TASKS)]
+                t = node.submit_task(tt, pl, priority=2)
+                node.memory.write(f"demo.task.{i}", t.id)
+                i += 1; time.sleep(20)
+        threading.Thread(target=demo_loop, daemon=True,
+                         name="demo").start()
+
+    print(f"""
+╔══════════════════════════════════════════════════════════════╗
+║       Mesh OS · Nodo N{args.id} activo                            ║
+╠══════════════════════════════════════════════════════════════╣
+║  Interfaz : {args.interface:<48}║
+║  Bind     : {args.bind:<48}║
+╠══════════════════════════════════════════════════════════════╣
+║  Puertos                                                     ║
+║    UDP {BCAST_PORT}  → OGMs y Beacons (broadcast)              ║
+║    TCP {UNICAST_PORT}  → Transferencia de tareas                ║
+║    TCP {MEM_PORT}  → Sincronización de memoria              ║
+║    TCP {CTRL_PORT}  → CLI de control (solo loopback)         ║
+╠══════════════════════════════════════════════════════════════╣
+║  En otra terminal:                                           ║
+║    python3 mesh_cli.py                                       ║
+║  Ctrl+C para apagar                                          ║
+╚══════════════════════════════════════════════════════════════╝
+""")
+    node.run_forever()
